@@ -4,7 +4,7 @@ Section: hamradio
 Priority: optional
 Rules-Requires-Root: no
 Standards-Version: 4.3.0
-Build-Depends: debhelper (>= 12), cmake, libfftw3-dev (>= 3.3), libcsdr-dev (>= 0.19)
+Build-Depends: debhelper (>= 12), cmake, libfftw3-dev (>= 3.3), libcsdr-dev (>= 0.18.18)
 
 Package: libcsdr-eti0
 Architecture: any
@@ -16,5 +16,5 @@ Description: DAB ETI decoder as a csdr module
 
 Package: libcsdr-eti-dev
 Architecture: any
-Depends: libcsdr-eti0 (=${binary:Version}), libfftw3-dev (>= 3.3), libcsdr-dev(>= 0.19), ${misc:Depends}
+Depends: libcsdr-eti0 (=${binary:Version}), libfftw3-dev (>= 3.3), libcsdr-dev(>= 0.18.18), ${misc:Depends}
 Description: development debendencis for libcsdr-eti
