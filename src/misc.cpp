@@ -10,11 +10,11 @@ extern "C" {
 
 void merge_info(struct ens_info_t* ei, struct tf_info_t *info)
 {
-    int i;
-    for (i=0;i<64;i++) {
-        if (info->subchans[i].id >= 0) {
-            ei->subchans[i] = info->subchans[i];
-        }
+    for (auto& it: info->subchans) {
+        ei->subchans[it.first] = it.second;
+    }
+    for (auto& it: info->services) {
+        ei->services[it.first] = it.second;
     }
     ei->EId = info->EId;
     if (ei->CIFCount_hi == 0xff) {
@@ -149,8 +149,7 @@ static uint16_t const crctab_1021[256] = {
         0x6e17, 0x7e36, 0x4e55, 0x5e74, 0x2e93, 0x3eb2, 0x0ed1, 0x1ef0
 };
 
-static uint16_t calc_crc(unsigned char *data, int length, uint16_t const *crctab, unsigned int crc)
-{
+static uint16_t calc_crc(unsigned char *data, int length, uint16_t const *crctab, unsigned int crc) {
     int count;
     unsigned int temp;
 
@@ -163,16 +162,14 @@ static uint16_t calc_crc(unsigned char *data, int length, uint16_t const *crctab
     return crc & 0xffff;
 }
 
-int check_fib_crc(uint8_t* data)
-{
+int check_fib_crc(uint8_t* data) {
 #define CRC_GOOD    0x1d0f
     uint16_t crc = calc_crc(data,32,crctab_1021,0xffff);
     return (crc == CRC_GOOD);
 }
 
 
-int init_eti(uint8_t* eti,struct ens_info_t *info)
-{
+int init_eti(uint8_t* eti, struct ens_info_t *info, std::map<int, struct subchannel_info_t>& subchans) {
     int i = 0;
     int j;
 
@@ -193,9 +190,11 @@ int init_eti(uint8_t* eti,struct ens_info_t *info)
     //   FC()
     eti[i++] = info->CIFCount_lo; // FCT
     int FICF = 1;  // FIC present in MST
-    int NST = 0;
+    int NST = subchans.size();
     int FL = 0;
-    for (j=0;j<64;j++) { if (info->subchans[j].id >= 0) { NST++; FL += (info->subchans[j].bitrate * 3) / 4; } }
+    for (auto& it: subchans) {
+        FL += (it.second.bitrate * 3) / 4;
+    }
     FL += NST + 1 + 24; // STC + EOH + MST (FIC data, Mode 1!)
     eti[i++] = (FICF << 7) | NST;
     int FP = ((info->CIFCount_hi * 250) + info->CIFCount_lo) % 8; // TODO (Guess!)
@@ -203,22 +202,20 @@ int init_eti(uint8_t* eti,struct ens_info_t *info)
     eti[i++] = (FP << 5) | (MID << 3) | ((FL & 0x700) >> 8);
     eti[i++] = FL & 0xff;
     //   STC()
-    for (j=0;j<64;j++) {
-        if (info->subchans[j].id >= 0) {
-            int SCID = info->subchans[j].id;
-            int SAD = info->subchans[j].start_cu;
-            int TPL;
-            if (info->subchans[j].slForm == 0) {
-                TPL = 0x10 | (info->subchans[j].protlev-1);
-            } else {
-                TPL = 0x20 | info->subchans[j].protlev;
-            }
-            int STL = (info->subchans[j].bitrate * 3) / 8;
-            eti[i++] = (SCID << 2) | ((SAD & 0x300) >> 8);
-            eti[i++] = SAD & 0xff;
-            eti[i++] = (TPL << 2) | ((STL & 0x300) >> 8);
-            eti[i++] = STL & 0xff;
+    for (auto& it: subchans) {
+        int SCID = it.first;
+        int SAD = it.second.start_cu;
+        int TPL;
+        if (it.second.slForm == 0) {
+            TPL = 0x10 | (it.second.protlev-1);
+        } else {
+            TPL = 0x20 | it.second.protlev;
         }
+        int STL = (it.second.bitrate * 3) / 8;
+        eti[i++] = (SCID << 2) | ((SAD & 0x300) >> 8);
+        eti[i++] = SAD & 0xff;
+        eti[i++] = (TPL << 2) | ((STL & 0x300) >> 8);
+        eti[i++] = STL & 0xff;
     }
     //  EOH()
     //   MNSC
@@ -233,8 +230,7 @@ int init_eti(uint8_t* eti,struct ens_info_t *info)
     return i;
 }
 
-void create_eti(struct dab_state_t* dab)
-{
+void create_eti(struct dab_state_t* dab) {
     uint8_t *fibs = dab->cifs_fibs[0];
     struct ens_info_t *info = &dab->ens_info;
     uint8_t cif_time_deinterleaved[3072*18];
@@ -251,8 +247,28 @@ void create_eti(struct dab_state_t* dab)
     int i;
     uint8_t eti[6144];
 
+    // if filtered, collect all the subchannels we are interested in
+    std::set<int> channel_filter;
+    for (auto& it: dab->service_id_filter) {
+        if (dab->ens_info.services.count(it)) {
+            auto& subchans = dab->ens_info.services[it].subchannels;
+            channel_filter.insert(subchans.begin(), subchans.end());
+        }
+    }
+
+    std::map<int, struct subchannel_info_t> subchans;
+    if (channel_filter.empty()) {
+        subchans = info->subchans;
+    } else {
+        for (auto it: info->subchans) {
+            if (channel_filter.count(it.first)) {
+                subchans[it.first] = it.second;
+            }
+        }
+    }
+
     /* Create our ETI frame, including FIB data */
-    int e1 = init_eti(eti,info);
+    int e1 = init_eti(eti,info, subchans);
 
     /* Add FIBs */
     memcpy(eti+e1, fibs, 96);
@@ -262,38 +278,36 @@ void create_eti(struct dab_state_t* dab)
     time_deinterleave(cif_time_deinterleaved, dab->cifs_msc);
 
     /* Now go through each subchannel, outputting the MSC data to our ETI frame */
-    for (i=0;i<64;i++) {
-        if (info->subchans[i].id >= 0) {
-            struct subchannel_info_t* sc = &info->subchans[i];
+    for (auto it: subchans) {
+        struct subchannel_info_t sc = it.second;
 
-            //  fprintf(stderr,"Decoding subchannel %d\n",sc->id);
-            /* Apply appropriate depuncture for each subchannel */
-            if (sc->eepprot)
-                eep_depuncture(dpbuf, cif_time_deinterleaved + sc->start_cu * 64, sc, &len);
-            else
-                uep_depuncture(dpbuf, cif_time_deinterleaved + sc->start_cu * 64, sc, &len);
+        //  fprintf(stderr,"Decoding subchannel %d\n",sc->id);
+        /* Apply appropriate depuncture for each subchannel */
+        if (sc.eepprot)
+            eep_depuncture(dpbuf, cif_time_deinterleaved + sc.start_cu * 64, &sc, &len);
+        else
+            uep_depuncture(dpbuf, cif_time_deinterleaved + sc.start_cu * 64, &sc, &len);
 
-            //fprintf(stderr,"Depunctured - len=%d, sc->size=%d\n",len,sc->size);
+        //fprintf(stderr,"Depunctured - len=%d, sc->size=%d\n",len,sc->size);
 
-            bits = len/N - (K - 1);
-            obytes = ((bits / 8) + 7) & 0xfff8; /* Round up to multiple of 64 bits (8 bytes) */
+        bits = len/N - (K - 1);
+        obytes = ((bits / 8) + 7) & 0xfff8; /* Round up to multiple of 64 bits (8 bytes) */
 
-            viterbi(dpbuf, eti + e, bits);
+        viterbi(dpbuf, eti + e, bits);
 
-            dab_descramble_bytes(eti + e, obytes);
+        dab_descramble_bytes(eti + e, obytes);
 
 #if 0
-            /* TODO: Possibly check CRC.  This is not straightforward, as it
-	 is only calculated over part of the frame, and you need to
-	 parse the MPEG data to find out how many bits are included in
-	 the CRC check. */
-      int my_crc = calc_crc(eti+e+2,2,crctab_8005,0xffff);
-      my_crc = calc_crc(eti+e+6,obytes-6,crctab_8005,my_crc);
-      int mpeg_crc = (eti[e+4] << 8) | eti[e+5];
-      fprintf(stderr,"my crc=0x%04x, crc in data = 0x%04x\n",my_crc,mpeg_crc);
+        /* TODO: Possibly check CRC.  This is not straightforward, as it
+	    is only calculated over part of the frame, and you need to
+	    parse the MPEG data to find out how many bits are included in
+	    the CRC check. */
+        int my_crc = calc_crc(eti+e+2,2,crctab_8005,0xffff);
+        my_crc = calc_crc(eti+e+6,obytes-6,crctab_8005,my_crc);
+        int mpeg_crc = (eti[e+4] << 8) | eti[e+5];
+        fprintf(stderr,"my crc=0x%04x, crc in data = 0x%04x\n",my_crc,mpeg_crc);
 #endif
-            e += obytes;
-        }
+        e += obytes;
     }
 
     // EOF - CRC
@@ -338,10 +352,8 @@ void dump_ens_info(struct ens_info_t* info)
 
     fprintf(stderr,"ENSEMBLE_INFO: EId=0x%04x, CIFCount = %d %d\n",info->EId,info->CIFCount_hi,info->CIFCount_lo);
 
-    for (i=0;i<64;i++) {
-        struct subchannel_info_t *sc = &info->subchans[i];
-        if (sc->id >= 0) {
-            fprintf(stderr,"SubChId=%2d, slForm=%d, StartAddress=%3d, size=%3d, bitrate=%3d, ASCTy=0x%02x\n",sc->id,sc->slForm,sc->start_cu,sc->size,sc->bitrate,sc->ASCTy);
-        }
+    for (auto chan: info->subchans) {
+        struct subchannel_info_t sc = chan.second;
+        fprintf(stderr,"SubChId=%2d, slForm=%d, StartAddress=%3d, size=%3d, bitrate=%3d\n", chan.first, sc.slForm, sc.start_cu, sc.size, sc.bitrate);
     }
 }

@@ -35,6 +35,7 @@ EtiDecoder::EtiDecoder() {
 
 EtiDecoder::~EtiDecoder() {
     delete metawriter;
+    delete dab;
     fftwf_destroy_plan(forward_plan);
     fftwf_destroy_plan(backward_plan);
     fftwf_destroy_plan(coarse_plan);
@@ -44,6 +45,10 @@ void EtiDecoder::setMetaWriter(MetaWriter *writer) {
     auto old = metawriter;
     metawriter = writer;
     delete old;
+}
+
+void EtiDecoder::setServiceFilter(std::set<uint32_t> services) {
+    dab->service_id_filter = std::move(services);
 }
 
 void EtiDecoder::sendMetaData(std::map<std::string, datatype> data) {
@@ -82,7 +87,7 @@ bool EtiDecoder::sdr_demod(Csdr::complex<float>* input, struct demapped_transmis
 
     coarse_freq_shift = get_coarse_freq_shift(input);
     if (abs(coarse_freq_shift) > 1) {
-        sendMetaData({ {"coarse_frequency_shift", (uint64_t) coarse_timeshift} });
+        sendMetaData({ {"coarse_frequency_shift", (int64_t) coarse_freq_shift} });
         //std::cerr << "coarse frequency shift: " << coarse_freq_shift << std::endl;
         force_timesync = true;
         return false;
@@ -330,7 +335,7 @@ int32_t EtiDecoder::get_fine_time_sync(Csdr::complex<float> *input) {
 }
 
 int32_t EtiDecoder::get_coarse_freq_shift(Csdr::complex<float> *input) {
-    fftwf_complex symbols[2048] = {0, 0};
+    fftwf_complex symbols[2048] = {0};
     fftwf_execute_dft(forward_plan, (fftwf_complex*) &input[2656 + 505 + fine_timeshift], symbols);
 
     fftwf_complex tmp;
@@ -351,7 +356,7 @@ int32_t EtiDecoder::get_coarse_freq_shift(Csdr::complex<float> *input) {
     int k;
     float global_max = -99999;
     int global_max_pos = 0;
-    for (k =- freq_hub; k <= freq_hub; k++) {
+    for (k = -freq_hub; k <= freq_hub; k++) {
 
         for (s = 0; s < len; s++) {
             convoluted_prs[s][0] = prs_static[freq_hub+s][0] * symbols[freq_hub+k+256+s][0]-
