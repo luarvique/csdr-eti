@@ -1,3 +1,9 @@
+csdr-eti (0.0.10) UNRELEASED; urgency=low
+
+  * Optimization
+
+ -- Jakob Ketterl <jakob.ketterl@gmx.de>  Fri, Feb 16 2024 19:55:00 +0000
+
 csdr-eti (0.0.9) UNRELEASED; urgency=low
 
   * Initial release
